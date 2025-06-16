@@ -14,6 +14,43 @@ import { ValidationResults } from '@/components/ValidationResults';
 import { BulkAnalysis } from '@/components/BulkAnalysis';
 import { FileUpload } from '@/components/FileUpload';
 
+// Helper to extract multiple JSON objects from arbitrary text
+const splitJsonObjects = (text: string): string[] => {
+    const objects: string[] = [];
+    let depth = 0;
+    let start = -1;
+    let inString = false;
+    let escape = false;
+
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (inString) {
+            if (escape) {
+                escape = false;
+            } else if (c === '\\') {
+                escape = true;
+            } else if (c === '"') {
+                inString = false;
+            }
+        } else {
+            if (c === '"') {
+                inString = true;
+            } else if (c === '{' || c === '[') {
+                if (depth === 0) start = i;
+                depth++;
+            } else if (c === '}' || c === ']') {
+                depth--;
+                if (depth === 0 && start !== -1) {
+                    const obj = text.slice(start, i + 1).trim();
+                    if (obj) objects.push(obj);
+                    start = -1;
+                }
+            }
+        }
+    }
+    return objects;
+};
+
 const Header = ({ mode, setMode }: { mode: 'single' | 'bulk', setMode: (m: 'single' | 'bulk') => void }) => {
     const navigate = useNavigate();
     
@@ -169,24 +206,15 @@ export default function IndexPage() {
 
     const handleAnalyze = useCallback(async () => {
         if (!jsonText.trim()) {
-            toast.error("Input is empty.");
+            toast.error('Input is empty.');
             return;
         }
 
         setIsLoading(true);
         setTimeout(() => {
-            let texts: string[] = [jsonText];
+            const texts = splitJsonObjects(jsonText.trim());
+            const results = (texts.length ? texts : [jsonText.trim()]).map(t => runAnalysis(t));
 
-            try {
-                JSON.parse(jsonText);
-            } catch {
-                const lines = jsonText.split('\n').map(l => l.trim()).filter(l => l);
-                if (lines.length > 1) {
-                    texts = lines;
-                }
-            }
-
-            const results = texts.map(t => runAnalysis(t));
             setMultiResults(results);
             setCurrentIndex(0);
 
@@ -198,9 +226,9 @@ export default function IndexPage() {
             if (results.length > 1) {
                 toast.success(`Analyzed ${results.length} requests.`);
             } else if (first.analysis && !first.analysis.error) {
-                toast.success("Analysis complete!", { description: `${first.issues.length} issue(s) found.` });
+                toast.success('Analysis complete!', { description: `${first.issues.length} issue(s) found.` });
             } else {
-                toast.error(first.analysis?.error || "An unknown analysis error occurred.");
+                toast.error(first.analysis?.error || 'An unknown analysis error occurred.');
             }
         }, 300);
     }, [jsonText, runAnalysis]);
@@ -213,19 +241,19 @@ export default function IndexPage() {
     }, []);
 
     const handleFormat = useCallback(() => {
-        const lines = jsonText.split('\n').filter(l => l.trim());
-        if (lines.length > 1) {
+        const objects = splitJsonObjects(jsonText.trim());
+        if (objects.length > 1) {
             const formatted: string[] = [];
-            for (let i = 0; i < lines.length; i++) {
+            for (let i = 0; i < objects.length; i++) {
                 try {
-                    const obj = JSON.parse(lines[i]);
+                    const obj = JSON.parse(objects[i]);
                     formatted.push(JSON.stringify(obj, null, 2));
                 } catch {
-                    toast.error(`Line ${i + 1} is not valid JSON.`);
+                    toast.error(`Request ${i + 1} is not valid JSON.`);
                     return;
                 }
             }
-            setJsonText(formatted.join('\n'));
+            setJsonText(formatted.join('\n\n'));
             toast.success('JSON formatted successfully.');
         } else {
             try {
@@ -245,7 +273,7 @@ export default function IndexPage() {
         reader.onload = (event) => {
             try {
                 const text = event.target?.result as string;
-                const requests = text.split('\n').filter(line => line.trim()).map(line => JSON.parse(line));
+                const requests = splitJsonObjects(text).map(obj => JSON.parse(obj));
                 
                 setMode('bulk');
                 setFileName(file.name);
@@ -255,7 +283,7 @@ export default function IndexPage() {
                 toast.success(`${requests.length} requests loaded from ${file.name}`);
             } catch (e) {
                 setIsLoading(false);
-                toast.error('Failed to parse file. Ensure it contains one valid JSON per line.');
+                toast.error('Failed to parse file. Ensure it contains valid JSON objects.');
             }
         };
         

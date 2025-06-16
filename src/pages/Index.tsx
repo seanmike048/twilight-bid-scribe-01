@@ -141,6 +141,7 @@ export default function IndexPage() {
     const [fileName, setFileName] = useState('');
     const [bulkRequests, setBulkRequests] = useState<any[]>([]);
     const [multiResults, setMultiResults] = useState<{analysis: AnalysisResult; issues: ValidationIssue[]}[]>([]);
+    const [multiTexts, setMultiTexts] = useState<string[]>([]);
     const [currentIndex, setCurrentIndex] = useState(0);
 
     useEffect(() => {
@@ -148,8 +149,11 @@ export default function IndexPage() {
             const res = multiResults[currentIndex];
             setAnalysisResult(res.analysis);
             setValidationIssues(res.issues);
+            if (multiTexts[currentIndex]) {
+                setJsonText(multiTexts[currentIndex]);
+            }
         }
-    }, [currentIndex, multiResults]);
+    }, [currentIndex, multiResults, multiTexts]);
 
     const runAnalysis = useCallback((text: string) => {
         const { analysis, issues } = analyzer.analyze(text);
@@ -213,14 +217,17 @@ export default function IndexPage() {
         setIsLoading(true);
         setTimeout(() => {
             const texts = splitJsonObjects(jsonText.trim());
-            const results = (texts.length ? texts : [jsonText.trim()]).map(t => runAnalysis(t));
+            const realTexts = texts.length ? texts : [jsonText.trim()];
+            const results = realTexts.map(t => runAnalysis(t));
 
             setMultiResults(results);
+            setMultiTexts(realTexts);
             setCurrentIndex(0);
 
             const first = results[0];
             setAnalysisResult(first.analysis);
             setValidationIssues(first.issues);
+            setJsonText(realTexts[0]);
             setIsLoading(false);
 
             if (results.length > 1) {
@@ -237,6 +244,9 @@ export default function IndexPage() {
         setJsonText(exampleBidRequests[key]);
         setAnalysisResult(null);
         setValidationIssues([]);
+        setMultiResults([]);
+        setMultiTexts([]);
+        setCurrentIndex(0);
         toast.info(`Loaded "${key}" example.`);
     }, []);
 
@@ -254,11 +264,14 @@ export default function IndexPage() {
                 }
             }
             setJsonText(formatted.join('\n\n'));
+            setMultiTexts(formatted);
             toast.success('JSON formatted successfully.');
         } else {
             try {
                 const parsed = JSON.parse(jsonText);
-                setJsonText(JSON.stringify(parsed, null, 2));
+                const formatted = JSON.stringify(parsed, null, 2);
+                setJsonText(formatted);
+                setMultiTexts([formatted]);
                 toast.success('JSON formatted successfully.');
             } catch {
                 toast.error('Cannot format invalid JSON.');
@@ -292,12 +305,16 @@ export default function IndexPage() {
 
     const handleRequestSelection = useCallback((request: any) => {
         setMode('single');
-        setJsonText(JSON.stringify(request, null, 2));
+        const text = JSON.stringify(request, null, 2);
+        setJsonText(text);
         setAnalysisResult(null);
         setValidationIssues([]);
-        
+        setMultiResults([]);
+        setMultiTexts([]);
+        setCurrentIndex(0);
+
         setTimeout(() => {
-            const { analysis, issues } = analyzer.analyze(JSON.stringify(request, null, 2));
+            const { analysis, issues } = analyzer.analyze(text);
             setAnalysisResult(analysis);
             setValidationIssues(issues);
             toast.info("Switched to single analysis for selected request.");
@@ -309,6 +326,7 @@ export default function IndexPage() {
         setAnalysisResult(null);
         setValidationIssues([]);
         setMultiResults([]);
+        setMultiTexts([]);
         setCurrentIndex(0);
     }, []);
 

@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
@@ -6,6 +6,7 @@ import { Toaster, toast } from 'sonner';
 import { FileText, Play, Trash2, ChevronDown, Info } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { Pagination, PaginationContent, PaginationItem, PaginationNext, PaginationPrevious } from '@/components/ui/pagination';
 
 import { analyzer, AnalysisResult, ValidationIssue } from '@/lib/analyzer';
 import { exampleBidRequests } from '@/lib/exampleData';
@@ -102,85 +103,107 @@ export default function IndexPage() {
     const [validationIssues, setValidationIssues] = useState<ValidationIssue[]>([]);
     const [fileName, setFileName] = useState('');
     const [bulkRequests, setBulkRequests] = useState<any[]>([]);
+    const [multiResults, setMultiResults] = useState<{analysis: AnalysisResult; issues: ValidationIssue[]}[]>([]);
+    const [currentIndex, setCurrentIndex] = useState(0);
+
+    useEffect(() => {
+        if (multiResults.length > 0) {
+            const res = multiResults[currentIndex];
+            setAnalysisResult(res.analysis);
+            setValidationIssues(res.issues);
+        }
+    }, [currentIndex, multiResults]);
+
+    const runAnalysis = useCallback((text: string) => {
+        const { analysis, issues } = analyzer.analyze(text);
+
+        if (analysis && !analysis.error) {
+            try {
+                const parsedRequest = JSON.parse(text);
+                const summary = analysis.summary as any;
+
+                if (!summary.timeoutMs && parsedRequest.tmax) {
+                    summary.timeoutMs = parsedRequest.tmax;
+                }
+
+                if (!summary.currency && parsedRequest.cur && parsedRequest.cur.length > 0) {
+                    summary.currency = parsedRequest.cur[0];
+                }
+
+                if (parsedRequest.imp && parsedRequest.imp.length > 0) {
+                    const firstImp = parsedRequest.imp[0];
+                    if (firstImp.bidfloor && !summary.bidFloor) {
+                        const floorCur = firstImp.bidfloorcur || summary.currency || '';
+                        summary.bidFloor = `${firstImp.bidfloor}${floorCur ? ` ${floorCur}` : ''}`;
+                    }
+                    if (!summary.currency && firstImp.bidfloorcur) {
+                        summary.currency = firstImp.bidfloorcur;
+                    }
+                }
+
+                if (parsedRequest.source && parsedRequest.source.schain && Array.isArray(parsedRequest.source.schain.nodes)) {
+                    summary.schainNodes = parsedRequest.source.schain.nodes.length;
+                }
+
+                const privacySignals: string[] = [];
+                if (parsedRequest.regs?.ext?.gdpr === 1) {
+                    privacySignals.push('GDPR Applicable');
+                }
+                if (parsedRequest.user?.ext?.consent) {
+                    privacySignals.push('TCF Consent String');
+                }
+                if (parsedRequest.regs?.ext?.us_privacy) {
+                    privacySignals.push('CCPA/US Privacy');
+                }
+                if (parsedRequest.regs?.gpp) {
+                    privacySignals.push('Global Privacy Platform (GPP)');
+                }
+                summary.privacySignals = privacySignals;
+            } catch (e) {
+                console.error('Could not parse JSON to enhance summary', e);
+            }
+        }
+
+        return { analysis, issues };
+    }, []);
 
     const handleAnalyze = useCallback(async () => {
         if (!jsonText.trim()) {
             toast.error("Input is empty.");
             return;
         }
-        
+
         setIsLoading(true);
-        
         setTimeout(() => {
-            const { analysis, issues } = analyzer.analyze(jsonText);
-            
-            if (analysis && !analysis.error) {
-                try {
-                    const parsedRequest = JSON.parse(jsonText);
-                    const summary = analysis.summary as any;
+            let texts: string[] = [jsonText];
 
-                    // Enhance summary with data the analyzer might have missed
-                    if (!summary.timeoutMs && parsedRequest.tmax) {
-                        summary.timeoutMs = parsedRequest.tmax;
-                    }
-
-                    // Top-level currency
-                    if (!summary.currency && parsedRequest.cur && parsedRequest.cur.length > 0) {
-                        summary.currency = parsedRequest.cur[0];
-                    }
-
-                    // Impression-level bid floor and currency
-                    if (parsedRequest.imp && parsedRequest.imp.length > 0) {
-                        const firstImp = parsedRequest.imp[0];
-                        if (firstImp.bidfloor && !summary.bidFloor) {
-                            // Use impression-level currency if available, otherwise fallback to request-level currency
-                            const floorCur = firstImp.bidfloorcur || summary.currency || '';
-                            summary.bidFloor = `${firstImp.bidfloor}${floorCur ? ` ${floorCur}` : ''}`;
-                        }
-                        // If request-level currency is missing, try to get it from the impression
-                        if (!summary.currency && firstImp.bidfloorcur) {
-                            summary.currency = firstImp.bidfloorcur;
-                        }
-                    }
-
-                    // Add schain info
-                    if (parsedRequest.source && parsedRequest.source.schain && Array.isArray(parsedRequest.source.schain.nodes)) {
-                        summary.schainNodes = parsedRequest.source.schain.nodes.length;
-                    }
-
-                    // Add Privacy Signals
-                    const privacySignals: string[] = [];
-                    if (parsedRequest.regs?.ext?.gdpr === 1) {
-                        privacySignals.push('GDPR Applicable');
-                    }
-                    if (parsedRequest.user?.ext?.consent) {
-                        privacySignals.push('TCF Consent String');
-                    }
-                    if (parsedRequest.regs?.ext?.us_privacy) {
-                        privacySignals.push('CCPA/US Privacy');
-                    }
-                    if (parsedRequest.regs?.gpp) {
-                        privacySignals.push('Global Privacy Platform (GPP)');
-                    }
-                    summary.privacySignals = privacySignals;
-
-                } catch (e) {
-                    // This is a safeguard; analyzer should have already caught invalid JSON.
-                    console.error("Could not parse JSON to enhance summary", e);
+            try {
+                JSON.parse(jsonText);
+            } catch {
+                const lines = jsonText.split('\n').map(l => l.trim()).filter(l => l);
+                if (lines.length > 1) {
+                    texts = lines;
                 }
             }
-            
-            setAnalysisResult(analysis);
-            setValidationIssues(issues);
+
+            const results = texts.map(t => runAnalysis(t));
+            setMultiResults(results);
+            setCurrentIndex(0);
+
+            const first = results[0];
+            setAnalysisResult(first.analysis);
+            setValidationIssues(first.issues);
             setIsLoading(false);
-            
-            if (analysis && !analysis.error) {
-                toast.success("Analysis complete!", { description: `${issues.length} issue(s) found.` });
+
+            if (results.length > 1) {
+                toast.success(`Analyzed ${results.length} requests.`);
+            } else if (first.analysis && !first.analysis.error) {
+                toast.success("Analysis complete!", { description: `${first.issues.length} issue(s) found.` });
             } else {
-                toast.error(analysis?.error || "An unknown analysis error occurred.");
+                toast.error(first.analysis?.error || "An unknown analysis error occurred.");
             }
         }, 300);
-    }, [jsonText]);
+    }, [jsonText, runAnalysis]);
 
     const handleLoadExample = useCallback((key: keyof typeof exampleBidRequests) => {
         setJsonText(exampleBidRequests[key]);
@@ -190,12 +213,28 @@ export default function IndexPage() {
     }, []);
 
     const handleFormat = useCallback(() => {
-        try {
-            const parsed = JSON.parse(jsonText);
-            setJsonText(JSON.stringify(parsed, null, 2));
-            toast.success("JSON formatted successfully.");
-        } catch {
-            toast.error("Cannot format invalid JSON.");
+        const lines = jsonText.split('\n').filter(l => l.trim());
+        if (lines.length > 1) {
+            const formatted: string[] = [];
+            for (let i = 0; i < lines.length; i++) {
+                try {
+                    const obj = JSON.parse(lines[i]);
+                    formatted.push(JSON.stringify(obj, null, 2));
+                } catch {
+                    toast.error(`Line ${i + 1} is not valid JSON.`);
+                    return;
+                }
+            }
+            setJsonText(formatted.join('\n'));
+            toast.success('JSON formatted successfully.');
+        } else {
+            try {
+                const parsed = JSON.parse(jsonText);
+                setJsonText(JSON.stringify(parsed, null, 2));
+                toast.success('JSON formatted successfully.');
+            } catch {
+                toast.error('Cannot format invalid JSON.');
+            }
         }
     }, [jsonText]);
 
@@ -241,6 +280,8 @@ export default function IndexPage() {
         setJsonText('');
         setAnalysisResult(null);
         setValidationIssues([]);
+        setMultiResults([]);
+        setCurrentIndex(0);
     }, []);
 
     return (
@@ -290,16 +331,27 @@ export default function IndexPage() {
                     
                     <div className="lg:col-span-7 h-full">
                         {mode === 'single' ? (
-                            <ValidationResults 
-                                analysis={analysisResult} 
-                                issues={validationIssues} 
-                                isLoading={isLoading} 
-                            />
+                            <div className="h-full flex flex-col space-y-2">
+                                {multiResults.length > 1 && (
+                                    <Pagination className="self-center">
+                                        <PaginationContent>
+                                            <PaginationPrevious onClick={() => setCurrentIndex(i => Math.max(i - 1, 0))} />
+                                            <PaginationItem className="px-3 flex items-center text-sm">{currentIndex + 1} / {multiResults.length}</PaginationItem>
+                                            <PaginationNext onClick={() => setCurrentIndex(i => Math.min(i + 1, multiResults.length - 1))} />
+                                        </PaginationContent>
+                                    </Pagination>
+                                )}
+                                <ValidationResults
+                                    analysis={analysisResult}
+                                    issues={validationIssues}
+                                    isLoading={isLoading}
+                                />
+                            </div>
                         ) : (
-                            <BulkAnalysis 
-                                data={bulkRequests} 
+                            <BulkAnalysis
+                                data={bulkRequests}
                                 fileName={fileName}
-                                onRequestSelect={handleRequestSelection} 
+                                onRequestSelect={handleRequestSelection}
                                 isLoading={isLoading}
                             />
                         )}
